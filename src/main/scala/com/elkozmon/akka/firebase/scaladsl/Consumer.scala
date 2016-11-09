@@ -5,7 +5,6 @@
 package com.elkozmon.akka.firebase.scaladsl
 
 import akka.Done
-import akka.stream.OverflowStrategy
 import akka.stream.scaladsl.Source
 import com.elkozmon.akka.firebase.Document
 import com.elkozmon.akka.firebase.internal.AsyncSourceStage
@@ -41,7 +40,11 @@ object Consumer {
     * The [[bufferedSource]] consumes `sourceNode` child nodes and stores
     * them in buffer of given size, until it becomes full.
     *
-    * Child nodes are emitted in an ascending lexicographical order of their keys.
+    * This source must be the only consumer of given `sourceNode`, otherwise
+    * some child nodes might end up being consumed by multiple consumers.
+    *
+    * [[Document]]s are emitted in an ascending lexicographical order
+    * of their keys.
     *
     * Each consumed child node is removed from the database.
     */
@@ -49,9 +52,5 @@ object Consumer {
       sourceNode: DatabaseReference,
       bufferSize: Int
   ): Source[Document, Control] =
-    Source
-      .fromGraph(new AsyncSourceStage(sourceNode, bufferSize))
-      .mapAsync(bufferSize)(identity)
-      .collect { case Some(doc) => doc }
-      .buffer(bufferSize, OverflowStrategy.backpressure)
+    Source.fromGraph(new AsyncSourceStage(sourceNode, bufferSize))
 }

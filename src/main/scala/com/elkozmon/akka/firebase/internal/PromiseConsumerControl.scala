@@ -23,7 +23,10 @@ private[firebase] trait PromiseConsumerControl extends Control {
 
   protected def doShutdown(): Unit
 
-  final protected def onStop(): Unit = stopPromise.trySuccess(Done)
+  final protected def onStop(): Unit = {
+    stopPromise.trySuccess(Done)
+    ()
+  }
 
   override final def abort(throwable: Throwable): Future[Done] = {
     doAbortCallback.invoke(throwable)

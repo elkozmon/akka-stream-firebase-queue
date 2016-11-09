@@ -4,8 +4,6 @@
 
 package com.elkozmon.akka.firebase.internal
 
-import java.util
-
 import akka.stream.stage._
 import akka.stream.{Attributes, Outlet, SourceShape}
 import com.elkozmon.akka.firebase.Document
@@ -13,19 +11,18 @@ import com.elkozmon.akka.firebase.scaladsl.Consumer.Control
 import com.google.firebase.database._
 
 import scala.collection.mutable
-import scala.concurrent.{Future, Promise}
 
 private[firebase] class AsyncSourceStage(
   sourceNode: DatabaseReference,
   bufferSize: Int
-) extends GraphStageWithMaterializedValue[SourceShape[Future[Option[Document]]], Control]
-  with Logging {
+) extends GraphStageWithMaterializedValue[SourceShape[Document], Control]
+    with Logging {
 
   require(bufferSize > 0, "bufferSize must be greater than 0.")
 
-  private val out = Outlet[Future[Option[Document]]]("out")
+  private val out = Outlet[Document]("out")
 
-  override def shape: SourceShape[Future[Option[Document]]] = SourceShape.of(out)
+  override def shape: SourceShape[Document] = SourceShape.of(out)
 
   @scala.throws[Exception](classOf[Exception])
   override def createLogicAndMaterializedValue(
@@ -34,44 +31,82 @@ private[firebase] class AsyncSourceStage(
     val logic = new GraphStageLogic(shape)
       with OutHandler
       with ChildEventListener
-      with ValueEventListener
+      with SetCompletionListener
       with PromiseConsumerControl {
 
       this.setHandler(out, this)
 
-      @volatile private var connected = false
+      private var shuttingDown = false
+
+      private var awaitingNullifyAcks = 0
 
       private val query = sourceNode.orderByKey().limitToFirst(bufferSize)
 
-      private val referenceKeySortedSet = mutable.SortedSet[String]()
+      private val snapshotKeys = new mutable.TreeSet[String]()
 
-      private val referenceMap = new util.HashMap[String, DatabaseReference]
+      private val snapshotMap = new mutable.AnyRefMap[String, DataSnapshot](bufferSize)
+
+      private val failureQueue = mutable.Queue.empty[Throwable]
 
       private val onChildAddedCallback = getAsyncCallback[DataSnapshot] {
         dataSnapshot =>
-          enqueueReference(dataSnapshot)
+          enqueueSnapshot(dataSnapshot)
 
           if (isAvailable(out)) {
-            push(out, pollDocument(pollReferenceNullable()))
+            pollDocument().foreach(pushAndNullifyDocument)
           }
       }
 
       private val onChildRemovedCallback = getAsyncCallback[DataSnapshot] {
         dataSnapshot =>
-          removeReference(dataSnapshot.getKey)
+          removeSnapshot(dataSnapshot.getKey)
+          ()
+      }
+
+      private val onSetErrorCallback = getAsyncCallback[Throwable] {
+        throwable =>
+          awaitingNullifyAcks -= 1
+          shuttingDown = true
+
+          failureQueue.enqueue(throwable)
+
+          if (awaitingNullifyAcks == 0) {
+            shutdownStage()
+          }
+      }
+
+      private val onSetSuccessCallback = getAsyncCallback[String] {
+        _ =>
+          awaitingNullifyAcks -= 1
+
+          if (shuttingDown && awaitingNullifyAcks == 0) {
+            shutdownStage()
+          }
       }
 
       private val onFailureCallback = getAsyncCallback[Throwable](failStage)
 
-      override protected def doAbort(throwable: Throwable): Unit =
+      override protected def doAbort(throwable: Throwable): Unit = {
+        log.info(s"Aborting consumer with $awaitingNullifyAcks outstanding acks.")
         failStage(throwable)
+      }
 
-      override protected def doShutdown(): Unit =
-        completeStage()
+      override protected def doShutdown(): Unit = {
+        shuttingDown = true
 
-      override def onChildMoved(dataSnapshot: DataSnapshot, previous: String): Unit = ()
+        if (awaitingNullifyAcks == 0) {
+          completeStage()
+        }
+      }
 
-      override def onChildChanged(dataSnapshot: DataSnapshot, previous: String): Unit = ()
+      override protected def onSetSuccess(key: String): Unit =
+        onSetSuccessCallback.invoke(key)
+
+      override protected def onSetError(throwable: Throwable): Unit =
+        onSetErrorCallback.invoke(throwable)
+
+      override def onCancelled(databaseError: DatabaseError): Unit =
+        onFailureCallback.invoke(databaseError.toException)
 
       override def onChildRemoved(dataSnapshot: DataSnapshot): Unit =
         onChildRemovedCallback.invoke(dataSnapshot)
@@ -79,110 +114,93 @@ private[firebase] class AsyncSourceStage(
       override def onChildAdded(dataSnapshot: DataSnapshot, previous: String): Unit =
         onChildAddedCallback.invoke(dataSnapshot)
 
-      /**
-        * Connection listener callback
-        */
-      override def onDataChange(dataSnapshot: DataSnapshot): Unit =
-      dataSnapshot.getValue match {
-        case connected: java.lang.Boolean if connected =>
-          log.debug("Source is connected.")
-          this.connected = true
-          this.resumeConsumer()
+      override def onChildMoved(dataSnapshot: DataSnapshot, previous: String): Unit = ()
 
-        case connected: java.lang.Boolean if !connected =>
-          log.debug("Source is disconnected.")
-          this.connected = false
-          this.pauseConsumer()
-
-        case _ =>
-      }
-
-      /**
-        * Connection listener callback
-        */
-      override def onCancelled(dbError: DatabaseError): Unit =
-        onFailureCallback.invoke(dbError.toException)
+      override def onChildChanged(dataSnapshot: DataSnapshot, previous: String): Unit = ()
 
       @scala.throws[Exception](classOf[Exception])
       override def preStart(): Unit = {
         super.preStart()
 
-        sourceNode
-          .getDatabase
-          .getReference(".info/connected")
-          .addValueEventListener(this)
+        startConsumer()
       }
 
       @scala.throws[Exception](classOf[Exception])
       override def postStop(): Unit = {
         super.postStop()
 
-        sourceNode.removeEventListener(this: ValueEventListener)
-        pauseConsumer()
+        stopConsumer()
         onStop()
       }
 
       @scala.throws[Exception](classOf[Exception])
-      override def onPull(): Unit = {
-        val nullableRef = pollReferenceNullable()
-
-        if (nullableRef != null) {
-          push(out, pollDocument(nullableRef))
-        }
-      }
-
-      private def pollReferenceNullable(): DatabaseReference =
-        if (referenceKeySortedSet.nonEmpty) {
-          val key = referenceKeySortedSet.head
-
-          removeReference(key)
+      override def onDownstreamFinish(): Unit =
+        if (awaitingNullifyAcks > 0) {
+          shuttingDown = true
+          setKeepGoing(true)
         } else {
-          null
+          completeStage()
         }
 
-      private def enqueueReference(dataSnapshot: DataSnapshot): Unit = {
-        referenceKeySortedSet.add(dataSnapshot.getKey)
-        referenceMap.put(dataSnapshot.getKey, dataSnapshot.getRef)
+      @scala.throws[Exception](classOf[Exception])
+      override def onPull(): Unit =
+        pollDocument().foreach(pushAndNullifyDocument)
+
+      private def pushAndNullifyDocument(document: Document): Unit = {
+        push(out, document)
+        nullifyDocument(document)
       }
 
-      private def removeReference(key: String): DatabaseReference = {
-        referenceKeySortedSet.remove(key)
-        referenceMap.remove(key)
+      private def nullifyDocument(document: Document): Unit = {
+        sourceNode
+          .child(document.key)
+          .setValue(null, this)
+
+        awaitingNullifyAcks += 1
       }
 
-      private def pollDocument(databaseReference: DatabaseReference): Future[Option[Document]] = {
-        val promiseDocumentOpt = Promise[Option[Document]]()
+      private def pollDocument(): Option[Document] =
+        snapshotKeys
+          .headOption
+          .flatMap(removeSnapshot)
+          .map {
+            dataSnapshot =>
+              Document(
+                key = dataSnapshot.getKey,
+                value = dataSnapshot.getValue
+              )
+          }
 
-        val pollTransactionHandler = new PollTransactionHandler {
-
-          override protected def onPollSuccess(key: String, value: AnyRef): Unit =
-            promiseDocumentOpt.success(Some(Document(key, value)))
-
-          override protected def onPollError(throwable: Throwable): Unit =
-            if (connected) {
-              onFailureCallback.invoke(throwable)
-            } else {
-              promiseDocumentOpt.trySuccess(None)
-            }
-
-          override protected def onPollAbort(): Unit =
-            promiseDocumentOpt.success(None)
-        }
-
-        databaseReference.runTransaction(pollTransactionHandler, false)
-
-        promiseDocumentOpt.future
+      private def enqueueSnapshot(dataSnapshot: DataSnapshot): Unit = {
+        snapshotKeys.add(dataSnapshot.getKey)
+        snapshotMap.put(dataSnapshot.getKey, dataSnapshot)
+        ()
       }
 
-      private def pauseConsumer(): Unit = {
-        log.debug("Pausing consumer.")
+      private def removeSnapshot(key: String): Option[DataSnapshot] = {
+        snapshotKeys.remove(key)
+        snapshotMap.remove(key)
+      }
+
+      private def stopConsumer(): Unit = {
+        log.debug("Stopping consumer.")
         query.removeEventListener(this: ChildEventListener)
       }
 
-      private def resumeConsumer(): Unit = {
-        log.debug(s"Resuming consumer.")
+      private def startConsumer(): Unit = {
+        log.debug(s"Starting consumer.")
         query.addChildEventListener(this)
+        ()
       }
+
+      private def shutdownStage(): Unit =
+        failureQueue.headOption match {
+          case Some(throwable) =>
+            failStage(throwable)
+
+          case None =>
+            completeStage()
+        }
     }
 
     (logic, logic)

@@ -12,8 +12,17 @@ crossScalaVersions := Seq(
 )
 
 scalacOptions ++= Seq(
+  "-encoding", "UTF-8",
+  "-unchecked",
   "-deprecation",
-  "-feature"
+  "-feature",
+  "-Xfuture",
+  "-Yno-adapted-args",
+  "-Ywarn-numeric-widen",
+  "-Ywarn-unused",
+  "-Ywarn-unused-import",
+  "-Ywarn-value-discard",
+  "-Ywarn-dead-code"
 )
 
 libraryDependencies ++= Seq(
@@ -23,9 +32,17 @@ libraryDependencies ++= Seq(
   "org.scala-lang.modules" %% "scala-java8-compat" % "0.8.0"
 )
 
-val gitHubUrl = "https://github.com/elkozmon/akka-stream-firebase-queue"
+homepage := Some(url("https://github.com/elkozmon/akka-stream-firebase-queue"))
 
-homepage := Some(url(gitHubUrl))
+licenses := Seq("MIT License" -> url("http://www.opensource.org/licenses/mit-license.php"))
+
+publishTo := {
+  val nexus = "https://oss.sonatype.org/"
+  if (isSnapshot.value)
+    Some("snapshots" at nexus + "content/repositories/snapshots")
+  else
+    Some("releases"  at nexus + "service/local/staging/deploy/maven2")
+}
 
 publishMavenStyle := true
 
@@ -34,14 +51,6 @@ publishArtifact in Test := false
 pomIncludeRepository := { _ => false }
 
 pomExtra :=
-  <url>${gitHubUrl}</url>
-  <licenses>
-    <license>
-      <name>MIT License</name>
-      <url>http://www.opensource.org/licenses/mit-license.php</url>
-      <distribution>repo</distribution>
-    </license>
-  </licenses>
   <scm>
     <url>git@github.com:elkozmon/akka-stream-firebase-queue.git</url>
     <connection>scm:git:git@github.com:elkozmon/akka-stream-firebase-queue.git</connection>

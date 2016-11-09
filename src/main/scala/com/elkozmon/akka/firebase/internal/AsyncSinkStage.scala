@@ -4,14 +4,13 @@
 
 package com.elkozmon.akka.firebase.internal
 
-import java.util.concurrent.atomic.AtomicLong
-
 import akka.Done
 import akka.stream.stage.{GraphStageLogic, GraphStageWithMaterializedValue, InHandler}
 import akka.stream.{Attributes, Inlet, SinkShape}
 import com.elkozmon.akka.firebase.Document
 import com.google.firebase.database.DatabaseReference
 
+import scala.collection.mutable
 import scala.concurrent.{Future, Promise}
 
 private[firebase] class AsyncSinkStage(
@@ -37,26 +36,40 @@ private[firebase] class AsyncSinkStage(
 
       private var shuttingDown = false
 
-      private var failureList = List.empty[Throwable]
+      private var awaitingSetAcks = 0
 
-      private val awaitingAcks = new AtomicLong(0)
+      private val failureQueue = mutable.Queue.empty[Throwable]
 
       private val onSetSuccessCallback =
         getAsyncCallback[Unit] {
-          case _ if shuttingDown && awaitingAcks.get() == 0 =>
-            shutdownStage()
+          _ =>
+            awaitingSetAcks -= 1
 
-          case _ => // ignore
+            if (shuttingDown && awaitingSetAcks == 0) {
+              shutdownStage()
+            }
         }
 
       private val onSetErrorCallback =
-        getAsyncCallback[Throwable](onFailure)
+        getAsyncCallback[Throwable] {
+          throwable =>
+            awaitingSetAcks -= 1
+
+            onFailure(throwable)
+        }
+
+      override protected def onSetSuccess(key: String): Unit =
+        onSetSuccessCallback.invoke(())
+
+      override protected def onSetError(throwable: Throwable): Unit =
+        onSetErrorCallback.invoke(throwable)
 
       @scala.throws[Exception](classOf[Exception])
       override def postStop(): Unit = {
         super.postStop()
 
         promiseDone.trySuccess(Done)
+        ()
       }
 
       @scala.throws[Exception](classOf[Exception])
@@ -69,7 +82,7 @@ private[firebase] class AsyncSinkStage(
 
       @scala.throws[Exception](classOf[Exception])
       override def onUpstreamFinish(): Unit =
-        if (awaitingAcks.get() == 0) {
+        if (awaitingSetAcks == 0) {
           shutdownStage()
         } else {
           shuttingDown = true
@@ -79,19 +92,9 @@ private[firebase] class AsyncSinkStage(
       override def onUpstreamFailure(throwable: Throwable): Unit =
         onFailure(throwable)
 
-      override protected def onSetSuccess(key: String): Unit = {
-        awaitingAcks.decrementAndGet()
-        onSetSuccessCallback.invoke(())
-      }
-
-      override protected def onSetError(throwable: Throwable): Unit = {
-        awaitingAcks.decrementAndGet()
-        onSetErrorCallback.invoke(throwable)
-      }
-
       @scala.throws[Exception](classOf[Exception])
       override def onPush(): Unit = {
-        awaitingAcks.incrementAndGet()
+        awaitingSetAcks += 1
 
         val document = grab(in)
 
@@ -112,15 +115,15 @@ private[firebase] class AsyncSinkStage(
 
       private def onFailure(throwable: Throwable): Unit = {
         shuttingDown = true
-        failureList +:= throwable
+        failureQueue.enqueue(throwable)
 
-        if (awaitingAcks.get() == 0) {
+        if (awaitingSetAcks == 0) {
           shutdownStage()
         }
       }
 
       private def shutdownStage(): Unit =
-        failureList.headOption match {
+        failureQueue.headOption match {
           case Some(throwable) =>
             failStage(throwable)
 
