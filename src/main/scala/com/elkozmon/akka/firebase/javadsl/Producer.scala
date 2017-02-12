@@ -6,12 +6,12 @@ package com.elkozmon.akka.firebase.javadsl
 
 import java.util.concurrent.CompletionStage
 
-import akka.Done
-import akka.stream.javadsl.Sink
+import akka.NotUsed
+import akka.stream.javadsl.Flow
 import com.elkozmon.akka.firebase.{Document, scaladsl}
 import com.google.firebase.database.DatabaseReference
 
-import scala.compat.java8.FutureConverters.FutureOps
+import scala.compat.java8.FutureConverters._
 
 /**
   * Akka Firebase connector for publishing documents to Firebase database.
@@ -19,17 +19,16 @@ import scala.compat.java8.FutureConverters.FutureOps
 object Producer {
 
   /**
-    * The [[asyncSink]] pushes documents into `targetNode` asynchronously
-    * without backpressure.
+    * The [[asyncFlow]] pushes documents into `targetNode` asynchronously.
     *
     * Child node is stored in `targetNode` under key of received [[Document]],
     * unless it's null in which case auto-generated Firebase id is used.
     */
-  def asyncSink(
+  def asyncFlow(
     targetNode: DatabaseReference
-  ): Sink[Document, CompletionStage[Done]] =
+  ): Flow[Document, CompletionStage[Document], NotUsed] =
     scaladsl.Producer
-      .asyncSink(targetNode)
-      .mapMaterializedValue(_.toJava)
+      .asyncFlow(targetNode)
+      .map(_.toJava)
       .asJava
 }

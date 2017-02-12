@@ -7,7 +7,7 @@ package com.elkozmon.akka.firebase.scaladsl
 import akka.Done
 import akka.stream.scaladsl.Source
 import com.elkozmon.akka.firebase.Document
-import com.elkozmon.akka.firebase.internal.AsyncSourceStage
+import com.elkozmon.akka.firebase.internal.AsyncConsumerStage
 import com.google.firebase.database.DatabaseReference
 
 import scala.concurrent.Future
@@ -37,7 +37,7 @@ object Consumer {
   }
 
   /**
-    * The [[bufferedSource]] consumes `sourceNode` child nodes and stores
+    * The [[asyncSource]] consumes `sourceNode` child nodes and stores
     * them in buffer of given size, until it becomes full.
     *
     * This source must be the only consumer of given `sourceNode`, otherwise
@@ -46,11 +46,11 @@ object Consumer {
     * [[Document]]s are emitted in an ascending lexicographical order
     * of their keys.
     *
-    * Each consumed child node is removed from the database.
+    * Each emitted [[Document]] is removed from the database.
     */
-  def bufferedSource(
+  def asyncSource(
       sourceNode: DatabaseReference,
       bufferSize: Int
-  ): Source[Document, Control] =
-    Source.fromGraph(new AsyncSourceStage(sourceNode, bufferSize))
+  ): Source[Future[Document], Control] =
+    Source.fromGraph(new AsyncConsumerStage(sourceNode, bufferSize))
 }

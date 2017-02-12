@@ -12,6 +12,8 @@ import com.elkozmon.akka.firebase.internal.JavaWrapperConsumerControl
 import com.elkozmon.akka.firebase.{Document, scaladsl}
 import com.google.firebase.database.DatabaseReference
 
+import scala.compat.java8.FutureConverters._
+
 /**
   * Akka Firebase connector for consuming documents from Firebase database
   * in a message queue manner, removing consumed documents from the database.
@@ -37,7 +39,7 @@ object Consumer {
   }
 
   /**
-    * The [[bufferedSource]] consumes `sourceNode` child nodes and stores
+    * The [[asyncSource]] consumes `sourceNode` child nodes and stores
     * them in buffer of given size, until it becomes full.
     *
     * This source must be the only consumer of given `sourceNode`, otherwise
@@ -46,14 +48,15 @@ object Consumer {
     * [[Document]]s are emitted in an ascending lexicographical order
     * of their keys.
     *
-    * Each consumed child node is removed from the database.
+    * Each emitted [[Document]] is removed from the database.
     */
-  def bufferedSource(
-      sourceNode: DatabaseReference,
-      bufferSize: Int
-  ): Source[Document, Control] =
+  def asyncSource(
+    sourceNode: DatabaseReference,
+    bufferSize: Int
+  ): Source[CompletionStage[Document], Control] =
     scaladsl.Consumer
-      .bufferedSource(sourceNode, bufferSize)
+      .asyncSource(sourceNode, bufferSize)
+      .map(_.toJava)
       .mapMaterializedValue(new JavaWrapperConsumerControl(_))
       .asJava
 }
