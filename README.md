@@ -13,7 +13,7 @@ Usage example
 ```scala
 import akka.NotUsed
 import akka.stream.Materializer
-import akka.stream.scaladsl.{Flow, Keep}
+import akka.stream.scaladsl.{Flow, Sink, Keep}
 import com.elkozmon.akka.firebase.Document
 import com.elkozmon.akka.firebase.scaladsl._
 import com.google.firebase.database.FirebaseDatabase
@@ -23,19 +23,24 @@ object Test {
   implicit val mat: Materializer = ???
 
   val transform: Flow[Document, Document, NotUsed] = ???
+  
+  val parallelism: Int = 512
 
-  val consumer = Consumer.bufferedSource(
+  val consumer = Consumer.asyncSource(
     sourceNode = FirebaseDatabase.getInstance().getReference("my-source"),
-    bufferSize = 32
+    bufferSize = 256
   )
 
-  val producer = Producer.asyncSink(
+  val producer = Producer.asyncFlow(
     targetNode = FirebaseDatabase.getInstance().getReference("my-sink")
   )
 
   val (consumerControl, futureDone) = consumer
+    .mapAsync(parallelism)(identity)
     .via(transform)
-    .toMat(producer)(Keep.both)
+    .via(producer)
+    .mapAsync(parallelism)(identity)
+    .toMat(Sink.ignore)(Keep.both)
     .run()
 }
 ```
