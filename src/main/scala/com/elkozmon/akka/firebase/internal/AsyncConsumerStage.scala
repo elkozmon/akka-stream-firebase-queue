@@ -16,8 +16,7 @@ import scala.concurrent.{Future, Promise}
 private[firebase] class AsyncConsumerStage(
   sourceNode: DatabaseReference,
   bufferSize: Int
-) extends GraphStageWithMaterializedValue[SourceShape[Future[Document]], Control]
-    with Logging {
+) extends GraphStageWithMaterializedValue[SourceShape[Future[Document]], Control] {
 
   require(bufferSize > 0, "bufferSize must be greater than 0.")
 
@@ -29,7 +28,7 @@ private[firebase] class AsyncConsumerStage(
   override def createLogicAndMaterializedValue(
     inheritedAttributes: Attributes
   ): (GraphStageLogic, Control) = {
-    val logic = new GraphStageLogic(shape)
+    val logic = new GraphStageLogicWithLogging(shape)
       with OutHandler
       with ChildEventListener
       with PromiseConsumerControl {

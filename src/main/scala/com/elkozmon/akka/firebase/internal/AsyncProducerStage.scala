@@ -13,8 +13,7 @@ import scala.concurrent.{Future, Promise}
 
 private[firebase] class AsyncProducerStage(
   targetNode: DatabaseReference
-) extends GraphStage[FlowShape[Document, Future[Document]]]
-    with Logging {
+) extends GraphStage[FlowShape[Document, Future[Document]]] {
 
   private val in = Inlet[Document]("in")
   private val out = Outlet[Future[Document]]("out")
