@@ -2,12 +2,12 @@ name := "akka-stream-firebase-queue"
 
 organization := "com.elkozmon"
 
-version := "2.0"
+version := "2.1"
 
 scalaVersion := crossScalaVersions.value.head
 
 crossScalaVersions := Seq(
-  "2.12.0",
+  "2.12.1",
   "2.11.8"
 )
 
