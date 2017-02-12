@@ -2,7 +2,7 @@ name := "akka-stream-firebase-queue"
 
 organization := "com.elkozmon"
 
-version := "1.0"
+version := "2.0"
 
 scalaVersion := crossScalaVersions.value.head
 
@@ -26,9 +26,9 @@ scalacOptions ++= Seq(
 )
 
 libraryDependencies ++= Seq(
-  "com.typesafe.akka" %% "akka-slf4j" % "2.4.12",
-  "com.typesafe.akka" %% "akka-stream" % "2.4.12",
-  "com.google.firebase" % "firebase-server-sdk" % "3.0.1",
+  "com.typesafe.akka" %% "akka-slf4j" % "2.4.16",
+  "com.typesafe.akka" %% "akka-stream" % "2.4.16",
+  "com.google.firebase" % "firebase-server-sdk" % "3.0.3",
   "org.scala-lang.modules" %% "scala-java8-compat" % "0.8.0"
 )
 
